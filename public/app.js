@@ -86,34 +86,18 @@ async function handleRoute() {
   const path = window.location.pathname;
   const relativePath = path.startsWith(BASE_PATH) ? path.slice(BASE_PATH.length) : path.substring(1);
   if (relativePath === "" || relativePath === "index.html") {
-    showSearchView();
+    const cityDetailDiv = document.getElementById("cityDetail");
+    if (cityDetailDiv)
+      cityDetailDiv.innerHTML = "";
   } else {
     const slug = relativePath.replace(".html", "");
     await loadCityBySlug(slug);
   }
 }
-function showSearchView() {
-  const searchView = document.getElementById("searchView");
-  const cityView = document.getElementById("cityView");
+function clearResults() {
   const results = document.getElementById("results");
-  if (searchView)
-    searchView.classList.remove("hidden");
-  if (cityView)
-    cityView.classList.add("hidden");
   if (results)
     results.innerHTML = "";
-}
-function showCityView() {
-  const searchView = document.getElementById("searchView");
-  const cityView = document.getElementById("cityView");
-  if (searchView)
-    searchView.classList.add("hidden");
-  if (cityView)
-    cityView.classList.remove("hidden");
-}
-function goBack() {
-  window.history.pushState({}, "", BASE_PATH);
-  showSearchView();
 }
 async function searchCities() {
   const searchInput = document.getElementById("searchInput");
@@ -174,8 +158,7 @@ function displaySearchResults(cities) {
     const [id, name, codeDepartement] = city;
     return `
             <div class="result-item" onclick="navigateToCityById(${id})">
-                <h3>${name}</h3>
-                <p>Département: ${codeDepartement}</p>
+                <h3>${name} (${codeDepartement})</h3>
             </div>
         `;
   }).join("");
@@ -186,7 +169,10 @@ async function navigateToCityById(id) {
   if (city?.slug) {
     window.history.pushState({}, "", `${BASE_PATH}${city.slug}`);
     displayCityDetail(city);
-    showCityView();
+    clearResults();
+    const searchInput = document.getElementById("searchInput");
+    if (searchInput)
+      searchInput.value = `${city.nom_standard} (${city.code_departement})`;
   }
 }
 async function loadCityBySlug(slug) {
@@ -194,7 +180,6 @@ async function loadCityBySlug(slug) {
   if (!cityDetailDiv)
     return;
   cityDetailDiv.innerHTML = '<p class="loading">Chargement...</p>';
-  showCityView();
   try {
     const city = await fetchCityBySlug(slug);
     if (!city) {
@@ -211,118 +196,32 @@ function displayCityDetail(city) {
   const cityDetailDiv = document.getElementById("cityDetail");
   if (!cityDetailDiv)
     return;
-  let toursHtml = "";
-  if (city["Tour 1"]) {
-    toursHtml += generateTourHtml("Tour 1", city["Tour 1"]);
+  const searchInput = document.getElementById("searchInput");
+  if (searchInput)
+    searchInput.value = `${city.nom_standard} (${city.code_departement})`;
+  if (!city.Analyse) {
+    cityDetailDiv.innerHTML = `<p class="error">Données d'analyse non disponibles pour cette ville</p>`;
+    return;
   }
-  if (city["Tour 2"]) {
-    toursHtml += generateTourHtml("Tour 2", city["Tour 2"]);
-  }
-  const analyseHtml = city.Analyse ? `
-            <div class="analyse-section">
-                <h3>Analyse</h3>
-                <div class="info-item">
-                    <div class="info-label">Votes décisifs</div>
-                    <div class="info-value">${city.Analyse["Votes décisifs"].toLocaleString()}</div>
-                </div>
-                <div class="info-item">
-                    <div class="info-label">Non votants de 18-24</div>
-                    <div class="info-value">${Math.round(city.Analyse["Non votants de 18-24"]).toLocaleString()}</div>
-                </div>
-            </div>
-        ` : "";
+  const votesDecisifs = city.Analyse["Votes décisifs"];
+  const nonVotants1824 = Math.round(city.Analyse["Non votants de 18-24"]);
+  const hasSecondTour = !!city["Tour 2"];
+  const mainTagline = hasSecondTour ? "votes suffisaient<br>pour élire un autre maire" : "votes suffisaient<br>pour aller au second tour";
   const html = `
         <div class="city-detail">
-            <h2>${city.nom_standard}</h2>
-            <div class="city-info">
-                <div class="info-item">
-                    <div class="info-label">Département</div>
-                    <div class="info-value">${city.code_departement} - ${city.libelle_departement}</div>
-                </div>
-                <div class="info-item">
-                    <div class="info-label">Code commune</div>
-                    <div class="info-value">${city.code_commune}</div>
-                </div>
+            <div class="main-stat">
+                <div class="main-number">${votesDecisifs.toLocaleString("fr-FR")}</div>
+                <div class="main-label">${mainTagline}</div>
             </div>
-            ${analyseHtml}
-            ${toursHtml}
+            <div class="secondary-stat">
+                <div class="secondary-number">${nonVotants1824.toLocaleString("fr-FR")}</div>
+                <div class="secondary-label">jeunes de 18-24 ans<br>n'ont pas voté</div>
+            </div>
         </div>
     `;
   cityDetailDiv.innerHTML = html;
 }
-function generateTourHtml(tourName, tourData) {
-  const stats = `
-        <div class="tour-stats">
-            <h4>Statistiques</h4>
-            <div class="stats-grid">
-                <div class="stat-item">
-                    <span class="stat-label">Inscrits</span>
-                    <span class="stat-value">${tourData.Inscrits.toLocaleString()}</span>
-                </div>
-                <div class="stat-item">
-                    <span class="stat-label">Votants</span>
-                    <span class="stat-value">${tourData.Votants.toLocaleString()} (${tourData["% Vot/Ins"].toFixed(2)}%)</span>
-                </div>
-                <div class="stat-item">
-                    <span class="stat-label">Abstentions</span>
-                    <span class="stat-value">${tourData.Abstentions.toLocaleString()} (${tourData["% Abs/Ins"].toFixed(2)}%)</span>
-                </div>
-                <div class="stat-item">
-                    <span class="stat-label">Exprimés</span>
-                    <span class="stat-value">${tourData.Exprimés.toLocaleString()} (${tourData["% Exp/Ins"].toFixed(2)}%)</span>
-                </div>
-                <div class="stat-item">
-                    <span class="stat-label">Blancs</span>
-                    <span class="stat-value">${tourData.Blancs.toLocaleString()} (${tourData["% Blancs/Vot"].toFixed(2)}%)</span>
-                </div>
-                <div class="stat-item">
-                    <span class="stat-label">Nuls</span>
-                    <span class="stat-value">${tourData.Nuls.toLocaleString()} (${tourData["% Nuls/Vot"].toFixed(2)}%)</span>
-                </div>
-            </div>
-        </div>
-    `;
-  const results = `
-        <div class="tour-results">
-            <h4>Résultats</h4>
-            <table class="results-table">
-                <thead>
-                    <tr>
-                        <th>Liste</th>
-                        <th>Tête de liste</th>
-                        <th>Nuance</th>
-                        <th>Voix</th>
-                        <th>% Voix/Exp</th>
-                        <th>% Voix/Ins</th>
-                        <th>Sièges</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    ${tourData.resultats.map((result) => `
-                        <tr>
-                            <td>${result.Liste}</td>
-                            <td>${result.Prénom} ${result.Nom}</td>
-                            <td>${result["Code Nuance"]}</td>
-                            <td>${result.Voix.toLocaleString()}</td>
-                            <td>${result["% Voix/Exp"].toFixed(2)}%</td>
-                            <td>${result["% Voix/Ins"].toFixed(2)}%</td>
-                            <td>${result["Sièges / Elu"]}</td>
-                        </tr>
-                    `).join("")}
-                </tbody>
-            </table>
-        </div>
-    `;
-  return `
-        <div class="tour-section">
-            <h3>${tourName}</h3>
-            ${stats}
-            ${results}
-        </div>
-    `;
-}
 window.navigateToCityById = navigateToCityById;
-window.goBack = goBack;
 if (document.readyState === "loading") {
   document.addEventListener("DOMContentLoaded", init);
 } else {
