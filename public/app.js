@@ -3,6 +3,50 @@ var normalizeText = (text) => text.normalize("NFD").replace(/\p{Diacritic}/gu, "
 
 // src/app.ts
 var searchTimeout = null;
+var searchIndexCache = {};
+var citiesDataCache = null;
+var slugMapCache = null;
+function getPartitionKey(query) {
+  const firstChar = query.charAt(0).toLowerCase();
+  if (firstChar >= "a" && firstChar <= "z") {
+    return firstChar;
+  }
+  return "0";
+}
+async function loadSearchPartition(partition) {
+  if (searchIndexCache[partition]) {
+    return searchIndexCache[partition];
+  }
+  const response = await fetch(`cities/search-${partition}.json`);
+  if (!response.ok) {
+    throw new Error(`Failed to load search partition ${partition}`);
+  }
+  const data = await response.json();
+  searchIndexCache[partition] = data;
+  return data;
+}
+async function loadCitiesData() {
+  if (citiesDataCache) {
+    return citiesDataCache;
+  }
+  const response = await fetch("cities/cities-data.json");
+  if (!response.ok) {
+    throw new Error("Failed to load cities data");
+  }
+  citiesDataCache = await response.json();
+  return citiesDataCache;
+}
+async function loadSlugMap() {
+  if (slugMapCache) {
+    return slugMapCache;
+  }
+  const response = await fetch("cities/slug-map.json");
+  if (!response.ok) {
+    throw new Error("Failed to load slug map");
+  }
+  slugMapCache = await response.json();
+  return slugMapCache;
+}
 function debounce(func, delay) {
   return () => {
     if (searchTimeout !== null) {
@@ -74,12 +118,9 @@ async function searchCities() {
   resultsDiv.innerHTML = '<p class="loading">Recherche en cours...</p>';
   try {
     const normalized = normalizeText(query);
-    const response = await fetch(`cities/search/${normalized}.json`);
-    if (!response.ok) {
-      resultsDiv.innerHTML = '<p class="error">Aucune ville trouvée</p>';
-      return;
-    }
-    const citiesData = await response.json();
+    const partition = getPartitionKey(normalized);
+    const searchIndex = await loadSearchPartition(partition);
+    const citiesData = searchIndex[normalized];
     if (!citiesData || citiesData.length === 0) {
       resultsDiv.innerHTML = '<p class="error">Aucune ville trouvée</p>';
       return;
@@ -92,10 +133,8 @@ async function searchCities() {
 }
 async function fetchCityById(id) {
   try {
-    const response = await fetch(`cities/${id}.json`);
-    if (!response.ok)
-      return null;
-    return await response.json();
+    const citiesData = await loadCitiesData();
+    return citiesData[id] || null;
   } catch (error) {
     console.error(`Error fetching city ${id}:`, error);
     return null;
@@ -103,10 +142,11 @@ async function fetchCityById(id) {
 }
 async function fetchCityBySlug(slug) {
   try {
-    const response = await fetch(`cities/${slug}.json`);
-    if (!response.ok)
+    const slugMap = await loadSlugMap();
+    const id = slugMap[slug];
+    if (id === undefined)
       return null;
-    return await response.json();
+    return fetchCityById(id);
   } catch (error) {
     console.error(`Error fetching city ${slug}:`, error);
     return null;

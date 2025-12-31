@@ -4,6 +4,62 @@ import { normalizeText } from "./utils";
 // Router and app state
 let searchTimeout: number | null = null;
 
+// Cache for loaded data
+const searchIndexCache: Record<string, Record<string, CitySearchResult[]>> = {};
+let citiesDataCache: Record<number, City> | null = null;
+let slugMapCache: Record<string, number> | null = null;
+
+// Get partition key for a query (first character)
+function getPartitionKey(query: string): string {
+	const firstChar = query.charAt(0).toLowerCase();
+	if (firstChar >= "a" && firstChar <= "z") {
+		return firstChar;
+	}
+	return "0"; // Numbers and other characters
+}
+
+// Load a search partition if not already cached
+async function loadSearchPartition(
+	partition: string,
+): Promise<Record<string, CitySearchResult[]>> {
+	if (searchIndexCache[partition]) {
+		return searchIndexCache[partition];
+	}
+	const response = await fetch(`cities/search-${partition}.json`);
+	if (!response.ok) {
+		throw new Error(`Failed to load search partition ${partition}`);
+	}
+	const data = await response.json();
+	searchIndexCache[partition] = data;
+	return data;
+}
+
+// Load cities data if not already cached
+async function loadCitiesData(): Promise<Record<number, City>> {
+	if (citiesDataCache) {
+		return citiesDataCache;
+	}
+	const response = await fetch("cities/cities-data.json");
+	if (!response.ok) {
+		throw new Error("Failed to load cities data");
+	}
+	citiesDataCache = await response.json();
+	return citiesDataCache!;
+}
+
+// Load slug map if not already cached
+async function loadSlugMap(): Promise<Record<string, number>> {
+	if (slugMapCache) {
+		return slugMapCache;
+	}
+	const response = await fetch("cities/slug-map.json");
+	if (!response.ok) {
+		throw new Error("Failed to load slug map");
+	}
+	slugMapCache = await response.json();
+	return slugMapCache!;
+}
+
 // Debounce function
 function debounce(func: () => void, delay: number): () => void {
 	return () => {
@@ -105,14 +161,10 @@ async function searchCities(): Promise<void> {
 
 	try {
 		const normalized = normalizeText(query);
-		const response = await fetch(`cities/search/${normalized}.json`);
+		const partition = getPartitionKey(normalized);
+		const searchIndex = await loadSearchPartition(partition);
 
-		if (!response.ok) {
-			resultsDiv.innerHTML = '<p class="error">Aucune ville trouvée</p>';
-			return;
-		}
-
-		const citiesData: CitySearchResult[] = await response.json();
+		const citiesData: CitySearchResult[] = searchIndex[normalized];
 
 		if (!citiesData || citiesData.length === 0) {
 			resultsDiv.innerHTML = '<p class="error">Aucune ville trouvée</p>';
@@ -130,9 +182,8 @@ async function searchCities(): Promise<void> {
 // Fetch city by ID
 async function fetchCityById(id: number): Promise<City | null> {
 	try {
-		const response = await fetch(`cities/${id}.json`);
-		if (!response.ok) return null;
-		return await response.json();
+		const citiesData = await loadCitiesData();
+		return citiesData[id] || null;
 	} catch (error) {
 		console.error(`Error fetching city ${id}:`, error);
 		return null;
@@ -142,9 +193,10 @@ async function fetchCityById(id: number): Promise<City | null> {
 // Fetch city by slug
 async function fetchCityBySlug(slug: string): Promise<City | null> {
 	try {
-		const response = await fetch(`cities/${slug}.json`);
-		if (!response.ok) return null;
-		return await response.json();
+		const slugMap = await loadSlugMap();
+		const id = slugMap[slug];
+		if (id === undefined) return null;
+		return fetchCityById(id);
 	} catch (error) {
 		console.error(`Error fetching city ${slug}:`, error);
 		return null;

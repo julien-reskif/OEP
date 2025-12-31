@@ -1,16 +1,17 @@
 import { rm } from "node:fs/promises";
 
-import type { ElectionEntry, FullCity } from "./dtos/city";
+import type { City, ElectionEntry, FullCity } from "./dtos/city";
 import { fullCityToCity, normalizeText } from "./utils";
 
 const MAX_CITIES_PER_NGRAM = 20;
 const MIN_NGRAMS = 2;
 const NB_NGRAMS = 45;
 
-const outputDirectoryPath =
-	"./public/cities";
-const inputPath =
-	"./elections.json";
+// Partition keys: a-z for letters, 0 for numbers, _ for other
+const PARTITIONS = "abcdefghijklmnopqrstuvwxyz0".split("");
+
+const outputDirectoryPath = "./public/cities";
+const inputPath = "./elections.json";
 const inputFile = Bun.file(inputPath);
 
 interface Indexable {
@@ -79,6 +80,18 @@ export const createNGrams = (token: string): Set<string> => {
 	return nGrams;
 };
 
+// Get partition key for an ngram (first character, mapped to a-z or 0)
+const getPartitionKey = (ngram: string): string => {
+	const firstChar = ngram.charAt(0).toLowerCase();
+	if (firstChar >= "a" && firstChar <= "z") {
+		return firstChar;
+	}
+	if (firstChar >= "0" && firstChar <= "9") {
+		return "0"; // All numbers go to partition "0"
+	}
+	return "0"; // Other characters also go to "0"
+};
+
 const startTime = performance.now();
 
 const elections: ElectionEntry[] = await inputFile.json();
@@ -105,6 +118,8 @@ const citiesById = Object.fromEntries(cities.map((c) => [c.id, c]));
 const electionsById = Object.fromEntries(
 	elections.map((e) => [e.__id, e]),
 );
+
+// Build the search index with limited results per ngram
 const citiesIndex = Array.from(searchIndex.entries()).map(([k, v]) => [
 	k,
 	v
@@ -113,34 +128,62 @@ const citiesIndex = Array.from(searchIndex.entries()).map(([k, v]) => [
 				citiesById[a].nom_standard.length - citiesById[b].nom_standard.length,
 		)
 		.slice(0, MAX_CITIES_PER_NGRAM)
-		.map((i) => [i, citiesById[i].nom_standard, citiesById[i].code_departement]),
+		.map((i) => [
+			i,
+			citiesById[i].nom_standard,
+			citiesById[i].code_departement,
+		]),
 ]);
-const searchIndexJsonString = JSON.stringify(Object.fromEntries(citiesIndex));
+
+// Partition the search index by first character
+const partitionedIndex: Record<string, Record<string, unknown>> = {};
+for (const partition of PARTITIONS) {
+	partitionedIndex[partition] = {};
+}
+
+for (const [ngram, results] of citiesIndex) {
+	const partition = getPartitionKey(ngram as string);
+	partitionedIndex[partition][ngram as string] = results;
+}
 
 await rm(outputDirectoryPath, { recursive: true, force: true });
 
-for (const [k, v] of citiesIndex) {
-	const fileLocation = `${outputDirectoryPath}/search/${k}.json`;
-	Bun.write(fileLocation, JSON.stringify(v));
+// Write partitioned search index files (27 files: a-z + 0)
+for (const partition of PARTITIONS) {
+	const fileLocation = `${outputDirectoryPath}/search-${partition}.json`;
+	await Bun.write(fileLocation, JSON.stringify(partitionedIndex[partition]));
 }
 
+// Build all city data into a single object keyed by ID
+const allCitiesData: Record<number, City> = {};
 for (const fullCity of cities) {
 	const electionEntry = electionsById[fullCity.id];
 	if (electionEntry) {
 		const city = fullCityToCity(fullCity, electionEntry);
-		const fileLocation = `${outputDirectoryPath}/${city.id}.json`;
-		const prettyFileLocation = `${outputDirectoryPath}/${city.slug}.json`;
-		Bun.write(fileLocation, JSON.stringify(city));
-		Bun.write(prettyFileLocation, JSON.stringify(city));
+		allCitiesData[city.id] = city;
 	}
 }
 
+// Write single cities data file
+const citiesDataLocation = `${outputDirectoryPath}/cities-data.json`;
+await Bun.write(citiesDataLocation, JSON.stringify(allCitiesData));
+
+// Also write a slug-to-id mapping for direct slug lookups
+const slugToId: Record<string, number> = {};
+for (const city of Object.values(allCitiesData)) {
+	slugToId[city.slug] = city.id;
+}
+const slugMapLocation = `${outputDirectoryPath}/slug-map.json`;
+await Bun.write(slugMapLocation, JSON.stringify(slugToId));
+
 const endTime = performance.now();
 
-console.log(`⏺ ${cities.length} citiess`);
+console.log(`⏺ ${cities.length} cities`);
 console.log(`⏺ ${searchIndex.size} index entries`);
-const sizeInBytes = searchIndexJsonString.length;
-console.log(`⏺ ${Number(sizeInBytes / 1000).toFixed(1)} KB JSON size`);
+console.log(`⏺ ${PARTITIONS.length} search partition files`);
+console.log(`⏺ 1 cities-data.json file`);
+console.log(`⏺ 1 slug-map.json file`);
+console.log(`⏺ ${PARTITIONS.length + 2} total files`);
 console.log(
 	`⏺ ${Number(endTime - startTime).toFixed(1)} ms to process search index`,
 );
